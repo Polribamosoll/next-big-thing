@@ -1,3 +1,8 @@
+# Project-specific
+output/*.csv
+output/*.json
+config/sp500_tickers.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
