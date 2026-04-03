@@ -20,10 +20,8 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.settings import (
-    FINNHUB_API_KEY,
     GROWTH_THRESHOLD_PCT,
     LOOKBACK_DAYS,
-    MAX_REQUESTS_PER_MINUTE,
     VOLUME_SPIKE_MULTIPLIER,
 )
 from src.analysis.growth_detector import GrowthDetector
@@ -43,12 +41,6 @@ def run(
     limit: int | None = None,
     refresh_tickers: bool = False,
 ) -> list:
-    if not FINNHUB_API_KEY:
-        sys.exit(
-            "ERROR: FINNHUB_API_KEY is not set.\n"
-            "Copy .env.example to .env and add your Finnhub API key."
-        )
-
     # ── 1. Load tickers ──────────────────────────────────────────────
     if ticker_file:
         tickers = load_custom_tickers(ticker_file)

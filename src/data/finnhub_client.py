@@ -1,50 +1,40 @@
 """
-Finnhub API wrapper with built-in rate limiting and retry logic.
+Yahoo Finance data client (yfinance) — drop-in replacement for the former
+Finnhub client.
 
-Free tier limit: 60 requests/minute.
-We stay under that via a sliding-window counter controlled by
-MAX_REQUESTS_PER_MINUTE in config/settings.py.
+Returns candle dicts in the same Finnhub-compatible shape so that the rest
+of the codebase (GrowthDetector, etc.) needs no changes:
+
+    {"t": [unix_ts, ...], "o": [...], "h": [...], "l": [...],
+     "c": [...], "v": [...]}
+
+No API key required.
 """
 
-import time
 import logging
-import finnhub
+import time
+import warnings
+from datetime import datetime, timezone
 
-# Import lazily so tests can patch config before it is evaluated
-from config.settings import FINNHUB_API_KEY, MAX_REQUESTS_PER_MINUTE
+import urllib3
+import yfinance as yf
+from curl_cffi.requests import Session as CurlSession
 
 logger = logging.getLogger(__name__)
 
+# Corporate proxy intercepts TLS; disable cert verification.
+warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+
+_SESSION = CurlSession(impersonate="chrome", verify=False)
+
 
 class FinnhubClient:
-    """Thin wrapper around the official finnhub-python client."""
+    """yfinance-backed client with the same public interface as the former
+    Finnhub wrapper so that call sites require zero changes."""
 
     def __init__(self, api_key: str = None, max_rpm: int = None):
-        self._api_key = api_key or FINNHUB_API_KEY
-        self._max_rpm = max_rpm or MAX_REQUESTS_PER_MINUTE
-        self._client = finnhub.Client(api_key=self._api_key)
-        # Timestamps (float) of recent requests within the rolling 60-s window
-        self._request_log: list[float] = []
-
-    # ------------------------------------------------------------------
-    # Rate limiting
-    # ------------------------------------------------------------------
-
-    def _rate_limit(self) -> None:
-        """Block until we're allowed to fire the next request."""
-        now = time.monotonic()
-        # Drop timestamps older than 60 seconds
-        self._request_log = [t for t in self._request_log if now - t < 60.0]
-
-        if len(self._request_log) >= self._max_rpm:
-            # Oldest request inside the window; wait until it ages out
-            oldest = self._request_log[0]
-            sleep_for = 60.0 - (now - oldest) + 0.1  # small buffer
-            if sleep_for > 0:
-                logger.debug("Rate limit reached — sleeping %.1fs", sleep_for)
-                time.sleep(sleep_for)
-
-        self._request_log.append(time.monotonic())
+        # api_key / max_rpm kept for signature compatibility — not used.
+        pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -62,35 +52,35 @@ class FinnhubClient:
         Fetch OHLCV daily candles for *ticker* between Unix timestamps
         *from_ts* and *to_ts*.
 
-        Returns the raw Finnhub dict on success, or None when the API
-        reports no data for that ticker/range.
-
-        Raises the underlying exception after *retries* failed attempts.
+        Returns a Finnhub-compatible dict on success, or None when no data
+        is available for the ticker/range.
         """
+        start = datetime.fromtimestamp(from_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+        end = datetime.fromtimestamp(to_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
         for attempt in range(1, retries + 1):
             try:
-                self._rate_limit()
-                data = self._client.stock_candles(ticker, resolution, from_ts, to_ts)
+                df = yf.Ticker(ticker, session=_SESSION).history(start=start, end=end, interval="1d", auto_adjust=True)
 
-                if data.get("s") == "no_data":
+                if df.empty:
                     logger.info("No candle data for %s", ticker)
                     return None
 
-                return data
+                df = df.sort_index()
+                timestamps = [int(ts.timestamp()) for ts in df.index]
 
-            except finnhub.FinnhubAPIException as exc:
-                logger.warning(
-                    "Finnhub API error for %s (attempt %d/%d): %s",
-                    ticker, attempt, retries, exc,
-                )
-                if attempt < retries:
-                    time.sleep(2 ** attempt)  # exponential back-off
-                else:
-                    raise
+                return {
+                    "t": timestamps,
+                    "o": df["Open"].tolist(),
+                    "h": df["High"].tolist(),
+                    "l": df["Low"].tolist(),
+                    "c": df["Close"].tolist(),
+                    "v": df["Volume"].tolist(),
+                }
 
-            except Exception as exc:  # network errors, timeouts, etc.
+            except Exception as exc:
                 logger.warning(
-                    "Unexpected error for %s (attempt %d/%d): %s",
+                    "Error fetching %s (attempt %d/%d): %s",
                     ticker, attempt, retries, exc,
                 )
                 if attempt < retries:

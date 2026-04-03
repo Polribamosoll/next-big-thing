@@ -3,7 +3,11 @@
     "allow": [
       "Bash(pip install:*)",
       "Bash(python -m pip install -r requirements.txt -q)",
-      "Bash(python -m pytest tests/ -v)"
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pip install yfinance --quiet)",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import curl_cffi; print\\(curl_cffi.__version__\\)\")",
+      "Bash(python src/main.py --limit 10)"
     ]
   }
 }
